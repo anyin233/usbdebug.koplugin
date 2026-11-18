@@ -1,0 +1,9 @@
+build/
+dist/
+*.zip
+usbdebug.koplugin/bin/
+tools/mtp_tool
+__pycache__/
+*.pyc
+.DS_Store
+._*

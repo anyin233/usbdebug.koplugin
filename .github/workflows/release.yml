@@ -1,0 +1,89 @@
+name: Build & Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go vet & test
+        run: |
+          go vet ./...
+          go test -v ./...
+
+      - name: Check LuaJIT syntax & shell scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luajit libusb-1.0-0
+          for f in usbdebug.koplugin/*.lua; do
+            luajit -b "$f" /dev/null
+          done
+          bash -n scripts/*.sh skills/kindle-koreader-usbdebug/scripts/*.sh
+          python3 -B skills/kindle-koreader-usbdebug/scripts/kindle_usb_bridge.py selftest
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build multi-arch usbdebugd binaries
+        run: ./scripts/build.sh
+
+      - name: Package usbdebug.koplugin.zip
+        run: |
+          mkdir -p dist
+          zip -r dist/usbdebug.koplugin.zip usbdebug.koplugin \
+            -x "*.DS_Store" "*/._*" "__MACOSX/*"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: usbdebug.koplugin
+          path: dist/usbdebug.koplugin.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: usbdebug.koplugin
+          path: dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/usbdebug.koplugin.zip --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "$tag" dist/usbdebug.koplugin.zip \
+              --repo "${{ github.repository }}" \
+              --title "$tag" \
+              --generate-notes
+          fi
